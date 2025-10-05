@@ -1,7 +1,7 @@
 --[[
 	rbimgui-2
-	version 1.2
-	by Singularity
+	version 1.3 (Upgraded by GothbreachHelper)
+	by Singularity (enhanced)
         https://v3rmillion.net/member.php?action=profile&uid=947830
         Singularity#5490
 --]]
@@ -1115,6 +1115,8 @@ end
 
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
 local CoreGui = game:GetService("CoreGui")
 local ScreenGui = CoreGui:FindFirstChild("imgui2")
 local Presets = ScreenGui:FindFirstChild("Presets")
@@ -1122,10 +1124,11 @@ local ScreenGuiCache = ScreenGui:FindFirstChild("Cache")
 
 local colorpicking = false
 local sliding = false
+local resizing = false
 
 local event = { } do
     function event.new()
-        local event event = setmetatable({
+        local event = setmetatable({
             Alive = true,
         }, {
             __tostring = function()
@@ -1167,13 +1170,13 @@ local mouse = { } do
     mouse.InputBegan = event.new()
     mouse.InputEnded = event.new()
     UserInputService.InputBegan:Connect(function(inputObject)
-        if inputObject.UserInputType == Enum.UserInputType.MouseButton1 then
+        if inputObject.UserInputType = Enum.UserInputType.MouseButton1 then
             mouse.held = true
             mouse.InputBegan:Fire()
         end
     end)
     UserInputService.InputEnded:Connect(function(inputObject)
-        if inputObject.UserInputType == Enum.UserInputType.MouseButton1 then
+        if inputObject.UserInputType = Enum.UserInputType.MouseButton1 then
             mouse.held = false
             mouse.InputEnded:Fire()
         end
@@ -1187,7 +1190,7 @@ end
 local function resize(part, new, _delay)
 	_delay = _delay or 0.5
 	local tweenInfo = TweenInfo.new(_delay, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-	local tween = game:GetService("TweenService"):Create(part, tweenInfo, new)
+	local tween = TweenService:Create(part, tweenInfo, new)
 	tween:Play()
 end
 
@@ -1292,6 +1295,97 @@ local dragger = {} do
             end
         end)
     end
+
+    function dragger.resize(frame)
+        local grip = Instance.new("ImageButton")
+        grip.Name = "ResizeGrip"
+        grip.Parent = frame
+        grip.BackgroundTransparency = 1
+        grip.Size = UDim2.new(0, 16, 0, 16)
+        grip.Position = UDim2.new(1, -16, 1, -16)
+        grip.Image = "rbxassetid://3926305904"
+        grip.ImageColor3 = Color3.fromRGB(255, 255, 255)
+        grip.ZIndex = 5
+
+        local held = false
+        grip.MouseButton1Down:Connect(function()
+            if findBrowsingTopMost() == frame then
+                held = true
+                resizing = true
+            end
+        end)
+
+        mouse.InputEnded:Connect(function()
+            held = false
+            resizing = false
+        end)
+
+        RunService.Heartbeat:Connect(function()
+            if held and mouse.held then
+                local delta = getMouse() - frame.AbsolutePosition
+                local newSize = UDim2.new(0, math.max(200, frame.AbsoluteSize.X + delta.X), 0, math.max(150, frame.AbsoluteSize.Y + delta.Y))
+                frame.Size = newSize
+                local content = frame:FindFirstChild("Content")
+                if content then
+                    content.Size = UDim2.new(1, 0, 0, newSize.Y.Offset - 22)  -- Adjust for title bar
+                end
+                local cache = rawget(windowCache, frame)
+                if cache and cache.update_layers then
+                    cache.update_layers(frame.AbsoluteSize.Y + (content and content.AbsoluteSize.Y or 0))
+                end
+            end
+        end)
+    end
+end
+
+local function setupTabDrag(tabButton, tabsContainer)
+    local dragging = false
+    local originalPos = nil
+    local originalIndex = nil
+
+    tabButton.MouseButton1Down:Connect(function()
+        if findBrowsingTopMost() == tabButton.Parent.Parent then
+            dragging = true
+            originalPos = tabButton.AbsolutePosition
+            originalIndex = table.find(tabsContainer:GetChildren(), tabButton)
+            tabButton.ZIndex = 10
+        end
+    end)
+
+    RunService.Heartbeat:Connect(function()
+        if dragging and mouse.held then
+            tabButton.Position = UDim2.new(0, getMouse().X - tabButton.Parent.AbsolutePosition.X, 0, getMouse().Y - tabButton.Parent.AbsolutePosition.Y)
+            for _, otherTab in ipairs(tabsContainer:GetChildren()) do
+                if otherTab ~= tabButton and otherTab:IsA("TextButton") then
+                    if (getMouse().X > otherTab.AbsolutePosition.X and getMouse().X < otherTab.AbsolutePosition.X + otherTab.AbsoluteSize.X) then
+                        local layout = tabsContainer:FindFirstChildOfClass("UIListLayout")
+                        if layout then
+                            layout.SortOrder = Enum.SortOrder.Name
+                            tabButton.Name = tostring(originalIndex + math.random())
+                            otherTab.Name = tostring(originalIndex)
+                        end
+                    end
+                end
+            end
+        elseif dragging and not mouse.held then
+            dragging = false
+            tabButton.ZIndex = 1
+            tabButton.Position = UDim2.new(0, 0, 0, 0)
+            local layout = tabsContainer:FindFirstChildOfClass("UIListLayout")
+            if layout then
+                layout.SortOrder = Enum.SortOrder.LayoutOrder
+                local children = tabsContainer:GetChildren()
+                table.sort(children, function(a, b)
+                    return a.AbsolutePosition.X < b.AbsolutePosition.X
+                end)
+                for i, child in ipairs(children) do
+                    if child:IsA("TextButton") then
+                        child.LayoutOrder = i
+                    end
+                end
+            end
+        end
+    end)
 end
 
 local function betweenOpenInterval(n, n1, n2)
@@ -1379,11 +1473,13 @@ local settings = {
     end,
 }
 
-local library library = {
+local library = {
     new = function(options)
-        local cache = { }
+        local config = {}
         local self = {
             isopen = true,
+            config = config,
+            elements = {},
         }
 
         options = settings.new({
@@ -1396,14 +1492,23 @@ local library library = {
             rounding = 5,
             animation = 0.1,
             position = UDim2.new(0, 100, 0, 100),
+            tabs = false,
+            ConfigurationSaving = {
+                Enabled = true,
+                FolderName = nil,
+                FileName = "ImGui2",
+            },
         }).handle(options)
 
-        local main = new("Main") main.Parent = ScreenGui
+        local main = new("Main")
+        main.Parent = ScreenGui
         local content = main:FindFirstChild("Content")
         local tabs = main:FindFirstChild("Tabs")
         local shadow = main:FindFirstChild("Shadow")
         local layer = main:FindFirstChild("Layer")
         local expand = main:FindFirstChild("Expand")
+
+        dragger.resize(main)
 
         main.Position = options.position
         content.ImageTransparency = options.transparency
@@ -1429,1016 +1534,1036 @@ local library library = {
         content.Size = UDim2.new(1, 0, 0, options.size.Y)
         content.SliceScale = options.rounding / 100
 
+        local cache = { }
         function cache.update_layers(y)
             shadow.Position = UDim2.new(0, options.shadow, 0, options.shadow)
             shadow.Size = UDim2.new(1, 0, 0, y)
             shadow.SliceScale = options.rounding / 100
             layer.Size = UDim2.new(1, 0, 0, y)
             layer.SliceScale = options.rounding / 100
-        end cache.update_layers(main.AbsoluteSize.Y + content.AbsoluteSize.Y)
+        end
+        cache.update_layers(main.AbsoluteSize.Y + content.AbsoluteSize.Y)
 
         content:GetPropertyChangedSignal("Size"):Connect(function()
             cache.update_layers(main.AbsoluteSize.Y + content.AbsoluteSize.Y)
         end)
 
-        function self.new(tabOptions)
-            local self = { }
-            tabOptions = settings.new({
-                text = "New Tab",
-            }).handle(tabOptions)
+        rawset(windowCache, main, cache)
 
-            local tabbutton = new("TabButton")
+        if options.tabs then
+            tabs.Visible = true
             local tabbuttons = tabs:FindFirstChild("Items")
-            tabbutton.Parent = tabbuttons
-            tabbutton.Text = tabOptions.text
-            tabbutton.Size = UDim2.new(0, tabbutton.TextBounds.X, 1, 0)
-            tabbutton.TextColor3 = Color3.new(0.4, 0.4, 0.4)
-            tabbutton.MouseButton1Click:Connect(function()
-                self.show()
-            end)
-
-            local tab = new("Tab")
-            tab.Parent = content
-            local items = tab:FindFirstChild("Items")
-            tab.Visible = false
-
-            local function countSize(o, horizontal)
-                if not o:FindFirstChildOfClass("UIListLayout") then
-                    return
+            for _, tb in pairs(tabbuttons:GetChildren()) do
+                if tb:IsA("TextButton") then
+                    setupTabDrag(tb, tabbuttons)
                 end
-                local padding = o:FindFirstChildOfClass("UIListLayout").Padding.Offset
-                local X, Y = 0, 0
-                local _horizontal = 0
-                for i, v in next, o:GetChildren() do
-                    if not v:IsA("UIListLayout") then
-                        Y = Y + v.AbsoluteSize.Y + padding
-                        if v.AbsoluteSize.X > X then
-                            X = v.AbsoluteSize.X
+            end
+        else
+            tabs.Visible = false
+            tabs.Size = UDim2.new(0, 0, 0, 0)
+        end
+
+        local saveFolder = "ImGui2"
+        if options.ConfigurationSaving.FolderName then
+            saveFolder = options.ConfigurationSaving.FolderName
+        end
+        local saveFile = options.ConfigurationSaving.FileName .. ".json"
+        local configPath = saveFolder .. "/" .. saveFile
+
+        local function saveConfig()
+            if options.ConfigurationSaving.Enabled and writefile then
+                writefile(configPath, HttpService:JSONEncode(config))
+            end
+        end
+
+        local function loadConfig()
+            if options.ConfigurationSaving.Enabled and isfile and readfile and isfile(configPath) then
+                local success, loaded = pcall(HttpService.JSONDecode, HttpService, readfile(configPath))
+                if success then
+                    for flag, value in pairs(loaded) do
+                        local elem = self.elements[flag]
+                        if elem then
+                            pcall(elem.Set, elem, value)
                         end
-                        _horizontal = _horizontal + v.AbsoluteSize.X + padding
                     end
                 end
-                if horizontal then
-                    return Vector2.new(_horizontal, 0)
-                end
-                return Vector2.new(X, Y)
             end
+        end
+        loadConfig()
 
-            local function updateCanvas()
-                local XY = countSize(items)
-                if XY then
-                    items.CanvasSize = UDim2.new(0, XY.X, 0, XY.Y)
-                end
-            end
+        self.saveConfig = saveConfig
+        self.loadConfig = loadConfig
 
-            items.ScrollBarImageColor3 = Color3.new()
-            items.ChildAdded:Connect(updateCanvas)
-            items.ChildRemoved:Connect(updateCanvas)
+        local types = { } do
+            function types.label(labelOptions)
+                local self = { }
 
-            local types = { } do
-                function types.label(labelOptions)
-                    local self = { }
+                labelOptions = settings.new({
+                    text = "New Label",
+                    color = Color3.new(1, 1, 1),
+                }).handle(labelOptions)
 
-                    labelOptions = settings.new({
-                        text = "New Label",
-                        color = Color3.new(1, 1, 1),
-                    }).handle(labelOptions)
+                local label = new("Label")
+                label.Parent = content
+                label.Text = labelOptions.text
+                label.Size = UDim2.new(0, label.TextBounds.X, 0, label.Size.Y.Offset)
+                label.TextColor3 = labelOptions.color
 
-                    local label = new("Label")
-                    label.Parent = items
-                    label.Text = labelOptions.text
+                function self.setText(text)
+                    label.Text = text
                     label.Size = UDim2.new(0, label.TextBounds.X, 0, label.Size.Y.Offset)
-                    label.TextColor3 = labelOptions.color
-
-                    function self.setText(text)
-                        label.Text = text
-                        label.Size = UDim2.new(0, label.TextBounds.X, 0, label.Size.Y.Offset)
-                    end
-
-                    function self.setColor(color)
-                        label.TextColor3 = color
-                    end
-
-                    function self:Destroy()
-                        label:Destroy()
-                    end
-
-                    self.self = label
-                    return self
                 end
 
-                function types.button(buttonOptions)
-                    local self = { }
-                    self.eventBlock = false
-
-                    buttonOptions = settings.new({
-                        text = "New Button",
-                        color = options.color,
-                        rounding = options.rounding,
-                    }).handle(buttonOptions)
-
-                    local button = new("Button")
-                    button.Parent = items
-                    button.Text = buttonOptions.text
-                    button.Size = UDim2.new(0, button.TextBounds.X + 20, 0, 20)
-                    button.MouseButton1Click:Connect(function()
-                        if not self.eventBlock then
-                            self.event:Fire()
-                        end
-                    end)
-
-                    local ImageLabel = button:FindFirstChild("ImageLabel")
-                    local Layer = button:FindFirstChild("Layer")
-                    ImageLabel.ImageColor3 = buttonOptions.color
-                    Layer.ImageColor3 = tint(buttonOptions.color)
-                    ImageLabel.SliceScale = buttonOptions.rounding / 100
-                    Layer.SliceScale = buttonOptions.rounding / 100
-                    hoverColor(ImageLabel)
-
-                    function self.setColor(color)
-                        ImageLabel.ImageColor3 = color
-                        Layer.ImageColor3 = tint(color)
-                    end
-
-                    function self.getColor()
-                        return ImageLabel.ImageColor3
-                    end
-
-                    function self:Destroy()
-                        button:Destroy()
-                    end
-
-                    self.options = buttonOptions
-                    self.self = button
-                    self.event = event.new()
-                    return self
+                function self.setColor(color)
+                    label.TextColor3 = color
                 end
 
-                function types.switch(switchOptions)
-                    local self = { }
-                    self.on = false
+                function self:Destroy()
+                    label:Destroy()
+                end
 
-                    switchOptions = settings.new({
-                        text = "New Switch",
-                        on = false,
-                        color = options.color,
-                        rounding = options.rounding,
-                        animation = options.animation,
-                    }).handle(switchOptions)
-                    self.on = switchOptions.on
-                    self.eventBlock = false
+                self.self = label
+                return self
+            end
 
-                    local switch = new("Switch")
-                    switch.Parent = items
-                    local button = switch:FindFirstChild("Button")
-                    local text = switch:FindFirstChild("Text")
-                    local check = button:FindFirstChild("Check")
-                    local ImageLabel = button:FindFirstChild("ImageLabel")
-                    local layer = button:FindFirstChild("Layer")
+            function types.button(buttonOptions)
+                local self = { }
+                self.eventBlock = false
+
+                buttonOptions = settings.new({
+                    text = "New Button",
+                    color = options.color,
+                    rounding = options.rounding,
+                }).handle(buttonOptions)
+
+                local button = new("Button")
+                button.Parent = content
+                button.Text = buttonOptions.text
+                button.Size = UDim2.new(0, button.TextBounds.X + 20, 0, 20)
+                button.MouseButton1Click:Connect(function()
+                    if not self.eventBlock then
+                        self.event:Fire()
+                    end
+                end)
+
+                local ImageLabel = button:FindFirstChild("ImageLabel")
+                local Layer = button:FindFirstChild("Layer")
+                ImageLabel.ImageColor3 = buttonOptions.color
+                Layer.ImageColor3 = tint(buttonOptions.color)
+                ImageLabel.SliceScale = buttonOptions.rounding / 100
+                Layer.SliceScale = buttonOptions.rounding / 100
+                hoverColor(ImageLabel)
+
+                function self.setColor(color)
+                    ImageLabel.ImageColor3 = color
+                    Layer.ImageColor3 = tint(color)
+                end
+
+                function self.getColor()
+                    return ImageLabel.ImageColor3
+                end
+
+                function self:Destroy()
+                    button:Destroy()
+                end
+
+                self.options = buttonOptions
+                self.self = button
+                self.event = event.new()
+                return self
+            end
+
+            function types.switch(switchOptions)
+                local self = { }
+                self.on = false
+
+                switchOptions = settings.new({
+                    text = "New Switch",
+                    on = false,
+                    color = options.color,
+                    rounding = options.rounding,
+                    animation = options.animation,
+                    flag = nil,
+                }).handle(switchOptions)
+                self.on = switchOptions.on
+                self.eventBlock = false
+
+                local switch = new("Switch")
+                switch.Parent = content
+                local button = switch:FindFirstChild("Button")
+                local text = switch:FindFirstChild("Text")
+                local check = button:FindFirstChild("Check")
+                local ImageLabel = button:FindFirstChild("ImageLabel")
+                local layer = button:FindFirstChild("Layer")
+                ImageLabel.ImageColor3 = switchOptions.color
+                layer.ImageColor3 = tint(switchOptions.color)
+                ImageLabel.SliceScale = switchOptions.rounding / 100
+                layer.SliceScale = switchOptions.rounding / 100
+
+                text:GetPropertyChangedSignal("Text"):Connect(function()
+                    switch.Size = UDim2.new(0, 28 + text.TextBounds.X, 0, 20)
+                end)
+
+                text.Text = switchOptions.text
+                check.ImageTransparency = self.on and 0 or 1
+
+                button.MouseButton1Click:Connect(function()
+                    self.switch()
+                end)
+
+                function self.switch()
+                    self.set(not self.on)
+                end
+
+                function self.set(boolean)
+                    if (not not boolean) == self.on then return end
+                    self.on = not not boolean
+                    resize(check, { ImageTransparency = self.on and 0 or 1 }, switchOptions.animation)
+                    if not self.eventBlock then
+                        self.event:Fire(self.on)
+                    end
+                    if switchOptions.flag then
+                        config[switchOptions.flag] = self.on
+                        self.saveConfig()
+                    end
+                end
+
+                function self.setColor(color)
                     ImageLabel.ImageColor3 = switchOptions.color
-                    layer.ImageColor3 = tint(switchOptions.color)
-                    ImageLabel.SliceScale = switchOptions.rounding / 100
-                    layer.SliceScale = switchOptions.rounding / 100
-
-                    text:GetPropertyChangedSignal("Text"):Connect(function()
-                        switch.Size = UDim2.new(0, 28 + text.TextBounds.X, 0, 20)
-                    end)
-
-                    text.Text = switchOptions.text
-                    check.ImageTransparency = self.on and 0 or 1
-
-                    button.MouseButton1Click:Connect(function()
-                        self.switch()
-                    end)
-
-                    function self.switch()
-                        self.set(not self.on)
-                    end
-
-                    function self.set(boolean)
-                        if (not not boolean) == self.on then return end
-                        self.on = not not boolean
-                        resize(check, { ImageTransparency = self.on and 0 or 1 }, switchOptions.animation)
-                        if not self.eventBlock then
-                            self.event:Fire(self.on)
-                        end
-                    end
-
-                    function self.setColor(color)
-                        ImageLabel.ImageColor3 = switchOptions.color
-                        Layer.ImageColor3 = tint(switchOptions.color)
-                    end
-
-                    function self.getColor()
-                        return ImageLabel.ImageColor3
-                    end
-
-                    function self:Destroy()
-                        switch:Destroy()
-                    end
-
-                    self.options = switchOptions
-                    self.self = switch
-                    self.event = event.new()
-                    return self
+                    Layer.ImageColor3 = tint(switchOptions.color)
                 end
 
-                function types.slider(sliderOptions)
-                    local self = { }
+                function self.getColor()
+                    return ImageLabel.ImageColor3
+                end
 
-                    sliderOptions = settings.new({
-                        text = "New Slider",
-                        size = 150,
-                        min = 0,
-                        max = 100,
-                        value = 0,
-                        color = options.color,
-                        barcolor = bleach(options.color),
-                        rounding = options.rounding,
-                        animation = options.animation,
-                    }).handle(sliderOptions)
-                    self.value = sliderOptions.value
-                    self.event = event.new()
-                    self.eventBlock = false
+                function self:Destroy()
+                    switch:Destroy()
+                end
 
-                    local function round(x, n)
-                        local a = tostring(x * 10^n)
-                        return a:sub(1, -(n + 1)) .. "." .. a:sub(-n)
+                self.options = switchOptions
+                self.self = switch
+                self.event = event.new()
+                if switchOptions.flag then
+                    self.elements[switchOptions.flag] = self
+                end
+                return self
+            end
+
+            function types.slider(sliderOptions)
+                local self = { }
+
+                sliderOptions = settings.new({
+                    text = "New Slider",
+                    size = 150,
+                    min = 0,
+                    max = 100,
+                    value = 0,
+                    color = options.color,
+                    barcolor = bleach(options.color),
+                    rounding = options.rounding,
+                    animation = options.animation,
+                    flag = nil,
+                }).handle(sliderOptions)
+                self.value = sliderOptions.value
+                self.event = event.new()
+                self.eventBlock = false
+
+                local function round(x, n)
+                    local a = tostring(x * 10^n)
+                    return a:sub(1, -(n + 1)) .. "." .. a:sub(-n)
+                end
+
+                local slider = new("Slider")
+                slider.Parent = content
+
+                local text = slider:FindFirstChild("Text")
+                local outer = slider:FindFirstChild("Outer")
+                local inner = outer:FindFirstChild("Inner")
+                local _slider = inner:FindFirstChild("Slider")
+                local value = inner:FindFirstChild("Value")
+                inner.ClipsDescendants = true
+
+                outer.SliceScale = sliderOptions.rounding / 100
+                inner.SliceScale = sliderOptions.rounding / 100
+                inner.ImageColor3 = sliderOptions.color
+                _slider.BackgroundColor3 = sliderOptions.barcolor
+
+                function self.setColor(color)
+                    inner.ImageColor3 = color
+                    _slider.BackgroundColor3 = bleach(color)
+                end
+
+                function self.getColor(color)
+                    return inner.ImageColor3
+                end
+
+                text.Text = sliderOptions.text
+                outer.Size = UDim2.new(0, sliderOptions.size, 0, 20)
+                text.Position = UDim2.new(0, sliderOptions.size + 8, 0, 0)
+                slider.Size = UDim2.new(0, sliderOptions.size + 8 + text.TextBounds.X, 0, 20)
+
+                local function set(p)
+                    resize(_slider, { Position = UDim2.new(p, -2.5, 0, 0) }, sliderOptions.animation)
+                end
+
+                value.Text = round(self.value, 2)
+                local old
+
+                function self.set(n)
+                    assert(typeof(n) == "number", "invalid type")
+                    local min, max
+                    if sliderOptions.max > sliderOptions.min then
+                        max = sliderOptions.max
+                        min = sliderOptions.min
+                        n = math.clamp(n, sliderOptions.min, sliderOptions.max)
+                    else
+                        max = sliderOptions.min
+                        min = sliderOptions.max
+                        n = math.clamp(n, sliderOptions.max, sliderOptions.min)
                     end
-
-                    local slider = new("Slider")
-                    slider.Parent = items
-
-                    local text = slider:FindFirstChild("Text")
-                    local outer = slider:FindFirstChild("Outer")
-                    local inner = outer:FindFirstChild("Inner")
-                    local _slider = inner:FindFirstChild("Slider")
-                    local value = inner:FindFirstChild("Value")
-                    inner.ClipsDescendants = true
-
-                    outer.SliceScale = sliderOptions.rounding / 100
-                    inner.SliceScale = sliderOptions.rounding / 100
-                    inner.ImageColor3 = sliderOptions.color
-                    _slider.BackgroundColor3 = sliderOptions.barcolor
-
-                    function self.setColor(color)
-                        inner.ImageColor3 = color
-                        _slider.BackgroundColor3 = bleach(color)
-                    end
-
-                    function self.getColor(color)
-                        return inner.ImageColor3
-                    end
-
-                    text.Text = sliderOptions.text
-                    outer.Size = UDim2.new(0, sliderOptions.size, 0, 20)
-                    text.Position = UDim2.new(0, sliderOptions.size + 8, 0, 0)
-                    slider.Size = UDim2.new(0, sliderOptions.size + 8 + text.TextBounds.X, 0, 20)
-
-                    local function set(p)
-                        resize(_slider, { Position = UDim2.new(p, -2.5, 0, 0) }, sliderOptions.animation)
-                    end
-
-                    value.Text = round(self.value, 2)
-                    local old
-
-                    function self.set(n)
-                        assert(typeof(n) == "number", "invalid type")
-                        local min, max
-                        if sliderOptions.max > sliderOptions.min then
-                            max = sliderOptions.max
-                            min = sliderOptions.min
-                            n = math.clamp(n, sliderOptions.min, sliderOptions.max)
-                        else
-                            max = sliderOptions.min
-                            min = sliderOptions.max
-                            n = math.clamp(n, sliderOptions.max, sliderOptions.min)
+                    self.value = n
+                    if self.value ~= old then
+                        if not self.eventBlock then
+                            self.event:Fire(self.value)
                         end
-                        self.value = n
-                        if self.value ~= old then
-                            if not self.eventBlock then
-                                self.event:Fire(self.value)
+                    end
+                    old = self.value
+                    value.Text = round(self.value, 2)
+                    local d = math.abs(max - min)
+                    local p = (n - min) / d
+                    set(p)
+                    if sliderOptions.flag then
+                        config[sliderOptions.flag] = self.value
+                        self.saveConfig()
+                    end
+                end
+                self.set(self.value)
+
+                local inside = false
+                inner.MouseEnter:Connect(function()
+                    inside = true
+                end)
+                inner.MouseLeave:Connect(function()
+                    inside = false
+                end)
+
+                mouse.InputBegan:Connect(function()
+                    spawn(function()
+                        if inside and findBrowsingTopMost() == main then
+                            while mouse.held do
+                                sliding = true
+                                local p = getMouse()
+                                local x = math.floor(math.clamp(p.X - inner.AbsolutePosition.X, 0, sliderOptions.size))
+                                local m = sliderOptions.size / math.abs(sliderOptions.max - sliderOptions.min)
+                                local v = math.floor(x / m)
+                                self.set(v + (sliderOptions.min < sliderOptions.max and sliderOptions.min or sliderOptions.max))
+                                RunService.Heartbeat:Wait()
                             end
                         end
-                        old = self.value
-                        value.Text = round(self.value, 2)
-                        local d = math.abs(max - min)
-                        local p = (n - min) / d
-                        set(p)
-                    end
-                    self.set(self.value)
-
-                    local inside = false
-                    inner.MouseEnter:Connect(function()
-                        inside = true
                     end)
-                    inner.MouseLeave:Connect(function()
-                        inside = false
+                end)
+                mouse.InputEnded:Connect(function()
+                    sliding = false
+                end)
+
+                function self.Set(value)
+                    self.set(value)
+                end
+
+                function self:Destroy()
+                    slider:Destroy()
+                end
+
+                self.options = sliderOptions
+                self.self = slider
+                if sliderOptions.flag then
+                    self.elements[sliderOptions.flag] = self
+                end
+                return self
+            end
+
+            function types.color(colorOptions)
+                local self = { }
+                self.event = event.new()
+                self.isopen = true
+                self.visible = false
+                self.eventBlock = false
+
+                colorOptions = settings.new({
+                    text = "New Color Picker",
+                    color = Color3.new(1, 0, 0),
+                    position = UDim2.new(0, 100, 0, 100),
+                    flag = nil,
+                }).handle(colorOptions)
+
+                local colorPickerButton = new("ColorPicker")
+                colorPickerButton.Parent = content
+                local colorPicker = new("ColorPickerWindow")
+                colorPicker.Parent = ScreenGui
+                colorPicker.Visible = self.visible
+                dragger.new(colorPicker)
+
+                local text = colorPickerButton:FindFirstChild("Text")
+                local button = colorPickerButton:FindFirstChild("Button")
+                local ImageLabel = button:FindFirstChild("ImageLabel")
+                local layer = button:FindFirstChild("Layer")
+
+                text:GetPropertyChangedSignal("Text"):Connect(function()
+                    colorPickerButton.Size = UDim2.new(0, 28 + text.TextBounds.X, 0, 20)
+                    colorPicker:FindFirstChild("Title").Text = text.Text
+                end)
+
+                text.Text = colorOptions.text
+
+                button.MouseButton1Click:Connect(function()
+                    self.visible = not self.visible
+                    colorPicker.Visible = self.visible
+                    if self.visible then
+                        colorPicker.Position = UDim2.new(0, colorPickerButton.AbsolutePosition.X + colorPickerButton.AbsoluteSize.X, 0, colorPickerButton.AbsolutePosition.Y)
+                        self.open()
+                        setTopMost(colorPicker)
+                    end
+                end)
+
+                local colorCache = { }
+                function self.close()
+                    if not self.isopen then return end
+                    self.isopen = false
+
+                    resize(colorPicker:FindFirstChild("Expand"), { Rotation = 0 }, options.animation)
+                    colorCache.content_size = 200
+                    colorCache.tabs_size = tabs.Size.Y.Offset
+                    resize(colorPicker:FindFirstChild("Content"), { Size = UDim2.new(1, 0, 0, 0) }, options.animation)
+                end
+
+                function self.open()
+                    if self.isopen then return end
+                    self.isopen = true
+
+                    resize(colorPicker:FindFirstChild("Expand"), { Rotation = 90 }, options.animation)
+                    resize(colorPicker:FindFirstChild("Content"), { Size = UDim2.new(1, 0, 0, colorCache.content_size) }, options.animation)
+                end
+
+                function colorCache.update_layers(y)
+                    colorPicker:FindFirstChild("Shadow").Position = UDim2.new(0, options.shadow, 0, options.shadow)
+                    colorPicker:FindFirstChild("Shadow").Size = UDim2.new(1, 0, 0, y)
+                    colorPicker:FindFirstChild("Shadow").SliceScale = options.rounding / 100
+                    colorPicker:FindFirstChild("Layer").Size = UDim2.new(1, 0, 0, y)
+                    colorPicker:FindFirstChild("Layer").SliceScale = options.rounding / 100
+                end colorCache.update_layers(colorPicker.AbsoluteSize.Y + colorPicker:FindFirstChild("Content").AbsoluteSize.Y)
+
+                colorPicker:FindFirstChild("Content"):GetPropertyChangedSignal("Size"):Connect(function()
+                    colorCache.update_layers(colorPicker.AbsoluteSize.Y + colorPicker:FindFirstChild("Content").AbsoluteSize.Y)
+                end)
+
+                do -- Start closed, then open
+                    local old = options.animation
+                    options.animation = 0
+                    self.open()
+                    options.animation = old
+                end
+
+                colorPicker:FindFirstChild("Expand").MouseButton1Click:Connect(function()
+                    if self.isopen then
+                        self.close()
+                    else
+                        self.open()
+                    end
+                end)
+
+                do -- color picking
+                    local content = colorPicker:FindFirstChild("Content")
+                    local palette = content:FindFirstChild("Palette")
+                    local saturation = content:FindFirstChild("Saturation")
+
+                    local paletteIndicator = palette:FindFirstChild("Indicator")
+                    local saturationIndicator = saturation:FindFirstChild("Indicator")
+
+                    local h = 0
+                    local s = 1
+                    local v = 1
+
+                    function self.get()
+                        return Color3.fromHSV(h, s, v)
+                    end
+
+                    local function update()
+                        local color = self.get()
+                        button:FindFirstChild("ImageLabel").ImageColor3 = color
+                        button:FindFirstChild("Layer").ImageColor3 = tint(color)
+                        content:FindFirstChild("FinalColor").ImageColor3 = color
+                        content:FindFirstChild("PaletteColor").ImageColor3 = Color3.fromHSV(h, s, 1)
+                        content:FindFirstChild("SaturationColor").ImageColor3 = Color3.fromHSV(0, 0, v)
+                        local v2 = v < 0.5 and 1 or 0
+                        ImageLabel:FindFirstChild("ImageLabel").ImageColor3 = Color3.fromHSV(0, 0, v2)
+                        if not self.eventBlock then
+                            self.event:Fire(color)
+                        end
+                        if colorOptions.flag then
+                            config[colorOptions.flag] = {color.R, color.G, color.B}
+                            saveConfig()
+                        end
+                    end
+
+                    local Entered1, Entered2 = false, false
+                    palette.MouseEnter:Connect(function()
+                        Entered1 = true
+                    end)
+                    palette.MouseLeave:Connect(function()
+                        Entered1 = false
+                    end)
+                    saturation.MouseEnter:Connect(function()
+                        Entered2 = true
+                    end)
+                    saturation.MouseLeave:Connect(function()
+                        Entered2 = false
                     end)
 
                     mouse.InputBegan:Connect(function()
-                        spawn(function()
-                            if inside and findBrowsingTopMost() == main then
-                                while mouse.held do
-                                    sliding = true
+                        if Entered1 and findBrowsingTopMost() == colorPicker then
+                            spawn(function()
+                                colorpicking = true
+                                while mouse.held do -- palette
                                     local p = getMouse()
-                                    local x = math.floor(math.clamp(p.X - inner.AbsolutePosition.X, 0, sliderOptions.size))
-                                    local m = sliderOptions.size / math.abs(sliderOptions.max - sliderOptions.min)
-                                    local v = math.floor(x / m)
-                                    self.set(v + (sliderOptions.min < sliderOptions.max and sliderOptions.min or sliderOptions.max))
+                                    local x1 = math.clamp(p.X - palette.AbsolutePosition.X, 0, palette.AbsoluteSize.X)
+                                    local v1 = x1 / palette.AbsoluteSize.X
+                                    local x2 = math.clamp(p.Y - palette.AbsolutePosition.Y, 0, palette.AbsoluteSize.Y)
+                                    local v2 = x2 / palette.AbsoluteSize.Y
+                                    h = 1 - v1
+                                    s = 1 - v2
+
+                                    local sv1 = math.clamp(v1, 0, (palette.AbsoluteSize.X - 6) / palette.AbsoluteSize.X)
+                                    local sv2 = math.clamp(v2, 0, (palette.AbsoluteSize.Y - 6) / palette.AbsoluteSize.Y)
+                                    resize(paletteIndicator, { Position = UDim2.new(sv1, 0, sv2, 0) }, options.animation)
+
+                                    update()
                                     RunService.Heartbeat:Wait()
                                 end
-                            end
-                        end)
+                            end)
+                        end
+                        if Entered2 and findBrowsingTopMost() == colorPicker then
+                            spawn(function()
+                                colorpicking = true
+                                while mouse.held do -- saturation
+                                    local p = getMouse()
+                                    local x1 = math.clamp(p.Y - saturation.AbsolutePosition.Y, 0, saturation.AbsoluteSize.Y)
+                                    local v1 = x1 / saturation.AbsoluteSize.Y
+                                    v = 1 - v1
+
+                                    local sv1 = math.clamp(v1, 0, (saturation.AbsoluteSize.Y - 2) / saturation.AbsoluteSize.Y)
+                                    resize(saturationIndicator, { Position = UDim2.new(0, 0, sv1, 0) }, options.animation)
+
+                                    update()
+                                    RunService.Heartbeat:Wait()
+                                end
+                            end)
+                        end
                     end)
+
                     mouse.InputEnded:Connect(function()
-                        sliding = false
+                        colorpicking = false
                     end)
 
-                    function self:Destroy()
-                        slider:Destroy()
-                    end
+                    function self.set(color)
+                        local h2, s2, v2 = rgbtohsv(color)
+                        h = h2
+                        s = s2
+                        v = v2
 
-                    updateCanvas()
-                    self.options = sliderOptions
-                    self.self = slider
-                    return self
-                end
-
-                function types.color(colorOptions)
-                    local self = { }
-                    self.event = event.new()
-                    self.isopen = true
-                    self.visible = false
-                    self.eventBlock = false
-
-                    colorOptions = settings.new({
-                        text = "New Color Picker",
-                        color = Color3.new(1, 0, 0),
-                        position = UDim2.new(0, 100, 0, 100),
-                    }).handle(colorOptions)
-
-                    local colorPickerButton = new("ColorPicker")
-                    colorPickerButton.Parent = items
-                    local colorPicker = new("ColorPickerWindow")
-                    colorPicker.Parent = ScreenGui
-                    colorPicker.Visible = self.visible
-                    dragger.new(colorPicker)
-
-                    local text = colorPickerButton:FindFirstChild("Text")
-                    local button = colorPickerButton:FindFirstChild("Button")
-                    local ImageLabel = button:FindFirstChild("ImageLabel")
-                    local layer = button:FindFirstChild("Layer")
-
-                    text:GetPropertyChangedSignal("Text"):Connect(function()
-                        colorPickerButton.Size = UDim2.new(0, 28 + text.TextBounds.X, 0, 20)
-                        colorPicker:FindFirstChild("Title").Text = text.Text
-                    end)
-
-                    text.Text = colorOptions.text
-
-                    button.MouseButton1Click:Connect(function()
-                        self.visible = not self.visible
-                        colorPicker.Visible = self.visible
-                        if self.visible then
-                            colorPicker.Position = UDim2.new(0, colorPickerButton.AbsolutePosition.X + colorPickerButton.AbsoluteSize.X, 0, colorPickerButton.AbsolutePosition.Y)
-                            self.open()
-                            setTopMost(colorPicker)
-                        end
-                    end)
-
-                    local colorCache = { }
-                    function self.close()
-                        if not self.isopen then return end
-                        self.isopen = false
-
-                        resize(colorPicker:FindFirstChild("Expand"), { Rotation = 0 }, options.animation)
-                        colorCache.content_size = 200
-                        colorCache.tabs_size = tabs.Size.Y.Offset
-                        resize(colorPicker:FindFirstChild("Content"), { Size = UDim2.new(1, 0, 0, 0) }, options.animation)
-                    end
-
-                    function self.open()
-                        if self.isopen then return end
-                        self.isopen = true
-
-                        resize(colorPicker:FindFirstChild("Expand"), { Rotation = 90 }, options.animation)
-                        resize(colorPicker:FindFirstChild("Content"), { Size = UDim2.new(1, 0, 0, colorCache.content_size) }, options.animation)
-                    end
-
-                    function colorCache.update_layers(y)
-                        colorPicker:FindFirstChild("Shadow").Position = UDim2.new(0, options.shadow, 0, options.shadow)
-                        colorPicker:FindFirstChild("Shadow").Size = UDim2.new(1, 0, 0, y)
-                        colorPicker:FindFirstChild("Shadow").SliceScale = options.rounding / 100
-                        colorPicker:FindFirstChild("Layer").Size = UDim2.new(1, 0, 0, y)
-                        colorPicker:FindFirstChild("Layer").SliceScale = options.rounding / 100
-                    end colorCache.update_layers(colorPicker.AbsoluteSize.Y + colorPicker:FindFirstChild("Content").AbsoluteSize.Y)
-
-                    colorPicker:FindFirstChild("Content"):GetPropertyChangedSignal("Size"):Connect(function()
-                        colorCache.update_layers(main.AbsoluteSize.Y + colorPicker:FindFirstChild("Content").AbsoluteSize.Y)
-                    end)
-
-                    do -- Start closed, then open
-                        local old = options.animation
-                        options.animation = 0
-                        self.open()
-                        options.animation = old
-                    end
-
-                    colorPicker:FindFirstChild("Expand").MouseButton1Click:Connect(function()
-                        if self.isopen then
-                            self.close()
-                        else
-                            self.open()
-                        end
-                    end)
-
-                    do -- color picking
-                        local content = colorPicker:FindFirstChild("Content")
-                        local palette = content:FindFirstChild("Palette")
-                        local saturation = content:FindFirstChild("Saturation")
-
-                        local paletteIndicator = palette:FindFirstChild("Indicator")
-                        local saturationIndicator = saturation:FindFirstChild("Indicator")
-
-                        local h = 0
-                        local s = 1
-                        local v = 1
-
-                        function self.get()
-                            return Color3.fromHSV(h, s, v)
-                        end
-
-                        local function update()
-                            local color = self.get()
-                            button:FindFirstChild("ImageLabel").ImageColor3 = color
-                            button:FindFirstChild("Layer").ImageColor3 = tint(color)
-                            content:FindFirstChild("FinalColor").ImageColor3 = color
-                            content:FindFirstChild("PaletteColor").ImageColor3 = Color3.fromHSV(h, s, 1)
-                            content:FindFirstChild("SaturationColor").ImageColor3 = Color3.fromHSV(0, 0, v)
-                            local v2 = v < 0.5 and 1 or 0
-                            ImageLabel:FindFirstChild("ImageLabel").ImageColor3 = Color3.fromHSV(0, 0, v2)
-                            if not self.eventBlock then
-                                self.event:Fire(color)
-                            end
-                        end
-
-                        local Entered1, Entered2 = false, false
-                        palette.MouseEnter:Connect(function()
-                            Entered1 = true
-                        end)
-                        palette.MouseLeave:Connect(function()
-                            Entered1 = false
-                        end)
-                        saturation.MouseEnter:Connect(function()
-                            Entered2 = true
-                        end)
-                        saturation.MouseLeave:Connect(function()
-                            Entered2 = false
-                        end)
-
-                        mouse.InputBegan:Connect(function()
-                            if Entered1 and findBrowsingTopMost() == colorPicker then
-                                spawn(function()
-                                    colorpicking = true
-                                    while mouse.held do -- palette
-                                        local p = getMouse()
-                                        local x1 = math.clamp(p.X - palette.AbsolutePosition.X, 0, palette.AbsoluteSize.X)
-                                        local v1 = x1 / palette.AbsoluteSize.X
-                                        local x2 = math.clamp(p.Y - palette.AbsolutePosition.Y, 0, palette.AbsoluteSize.Y)
-                                        local v2 = x2 / palette.AbsoluteSize.Y
-                                        h = 1 - v1
-                                        s = 1 - v2
-
-                                        local sv1 = math.clamp(v1, 0, (palette.AbsoluteSize.X - 6) / palette.AbsoluteSize.X)
-                                        local sv2 = math.clamp(v2, 0, (palette.AbsoluteSize.Y - 6) / palette.AbsoluteSize.Y)
-                                        resize(paletteIndicator, { Position = UDim2.new(sv1, 0, sv2, 0) }, options.animation)
-
-                                        update()
-                                        RunService.Heartbeat:Wait()
-                                    end
-                                end)
-                            end
-                            if Entered2 and findBrowsingTopMost() == colorPicker then
-                                spawn(function()
-                                    colorpicking = true
-                                    while mouse.held do -- saturation
-                                        local p = getMouse()
-                                        local x1 = math.clamp(p.Y - saturation.AbsolutePosition.Y, 0, saturation.AbsoluteSize.Y)
-                                        local v1 = x1 / saturation.AbsoluteSize.Y
-                                        v = 1 - v1
-
-                                        local sv1 = math.clamp(v1, 0, (palette.AbsoluteSize.Y - 2) / palette.AbsoluteSize.Y)
-                                        resize(saturationIndicator, { Position = UDim2.new(0, 0, sv1, 0) }, options.animation)
-
-                                        update()
-                                        RunService.Heartbeat:Wait()
-                                    end
-                                end)
-                            end
-                        end)
-
-                        mouse.InputEnded:Connect(function()
-                            colorpicking = false
-                        end)
-
-                        function self.set(color)
-                            local h2, s2, v2 = rgbtohsv(color)
-                            h = h2
-                            s = s2
-                            v = v2
-
-                            local hx = math.clamp(1 - h, 0, (palette.AbsoluteSize.X - 6) / palette.AbsoluteSize.X)
-                            local sx = math.clamp(1 - s, 0, (palette.AbsoluteSize.Y - 6) / palette.AbsoluteSize.Y)
-                            local vx = math.clamp(1 - v, 0, (saturation.AbsoluteSize.Y - 2) / saturation.AbsoluteSize.Y)
-                            resize(paletteIndicator, { Position = UDim2.new(hx, 0, sx, 0) }, options.animation)
-                            resize(saturationIndicator, { Position = UDim2.new(0, 0, vx, 0) }, options.animation)
-
-                            update()
-                        end
+                        local hx = math.clamp(1 - h, 0, (palette.AbsoluteSize.X - 6) / palette.AbsoluteSize.X)
+                        local sx = math.clamp(1 - s, 0, (palette.AbsoluteSize.Y - 6) / palette.AbsoluteSize.Y)
+                        local vx = math.clamp(1 - v, 0, (saturation.AbsoluteSize.Y - 2) / saturation.AbsoluteSize.Y)
+                        resize(paletteIndicator, { Position = UDim2.new(hx, 0, sx, 0) }, options.animation)
+                        resize(saturationIndicator, { Position = UDim2.new(0, 0, vx, 0) }, options.animation)
 
                         update()
                     end
 
-                    function self.setPosition(position)
-                        colorPicker.Position = position
+                    function self.Set(color)
+                        self.set(color)
                     end
 
-                    function self:Destroy()
-                        colorPickerButton:Destroy()
-                        colorPicker:Destroy()
-                    end
-
-                    self.self = colorPickerButton
-                    if colorOptions.color ~= Color3.new(1, 0, 0) then
-                        self.set(colorOptions.color)
-                    end
-                    self.close()
-                    return self
+                    update()
                 end
 
-                function types.dropdown(dropdownOptions)
-                    local self = { }
-                    self.isopen = true
-                    self.visible = false
-                    self.selected = nil
-                    self.event = event.new()
-                    self.eventBlock = false
+                function self.setPosition(position)
+                    colorPicker.Position = position
+                end
 
-                    dropdownOptions = settings.new({
-                        text = "New Dropdown",
-                        size = 150,
-                        color = Color3.fromRGB(32, 59, 97),
-                        rounding = options.rounding,
-                        selectioncolor = Color3.fromRGB(32, 59, 97),
-                    }).handle(dropdownOptions)
+                function self:Destroy()
+                    colorPickerButton:Destroy()
+                    colorPicker:Destroy()
+                end
 
-                    local dropdownButton = new("Dropdown")
-                    local dropdownWindow = new("DropdownWindow")
-                    dropdownWindow.Parent = ScreenGui
+                self.self = colorPickerButton
+                if colorOptions.color ~= Color3.new(1, 0, 0) then
+                    self.set(colorOptions.color)
+                end
+                self.close()
+                if colorOptions.flag then
+                    self.elements[colorOptions.flag] = self
+                end
+                return self
+            end
+
+            function types.dropdown(dropdownOptions)
+                local self = { }
+                self.isopen = true
+                self.visible = false
+                self.selected = nil
+                self.event = event.new()
+                self.eventBlock = false
+
+                dropdownOptions = settings.new({
+                    text = "New Dropdown",
+                    size = 150,
+                    color = Color3.fromRGB(32, 59, 97),
+                    rounding = options.rounding,
+                    selectioncolor = Color3.fromRGB(32, 59, 97),
+                    flag = nil,
+                }).handle(dropdownOptions)
+
+                local dropdownButton = new("Dropdown")
+                dropdownButton.Parent = content
+                local dropdownWindow = new("DropdownWindow")
+                dropdownWindow.Parent = ScreenGui
+                dropdownWindow.Visible = self.visible
+                dragger.new(dropdownWindow)
+
+                local text = dropdownButton:FindFirstChild("Text")
+                local outer = dropdownButton:FindFirstChild("Outer")
+                local inner = outer:FindFirstChild("Inner")
+                inner.ImageColor3 = dropdownOptions.color
+                outer.SliceScale = dropdownOptions.rounding / 100
+                inner.SliceScale = dropdownOptions.rounding / 100
+                inner:FindFirstChild("Value").Text = "[...]"
+
+                text.Text = dropdownOptions.text
+                dropdownWindow:FindFirstChild("Title").Text = dropdownOptions.text
+                outer.Size = UDim2.new(0, dropdownOptions.size, 0, 20)
+                text.Position = UDim2.new(0, dropdownOptions.size + 8, 0, 0)
+
+                inner.MouseButton1Click:Connect(function()
+                    self.visible = not self.visible
                     dropdownWindow.Visible = self.visible
-                    dragger.new(dropdownWindow)
-                    dropdownButton.Parent = items
+                    if self.visible then
+                        dropdownWindow.Position = UDim2.new(0, dropdownButton.AbsolutePosition.X + dropdownButton.AbsoluteSize.X, 0, dropdownButton.AbsolutePosition.Y)
+                        self.open()
+                        setTopMost(dropdownWindow)
+                    end
+                end)
 
-                    local text = dropdownButton:FindFirstChild("Text")
-                    local outer = dropdownButton:FindFirstChild("Outer")
-                    local inner = outer:FindFirstChild("Inner")
-                    inner.ImageColor3 = dropdownOptions.color
-                    outer.SliceScale = dropdownOptions.rounding / 100
-                    inner.SliceScale = dropdownOptions.rounding / 100
-                    inner:FindFirstChild("Value").Text = "[...]"
+                dropdownWindow:FindFirstChild("Expand").MouseButton1Click:Connect(function()
+                    if self.isopen then
+                        self.close()
+                    else
+                        self.open()
+                    end
+                end)
 
-                    text.Text = dropdownOptions.text
-                    dropdownWindow:FindFirstChild("Title").Text = dropdownOptions.text
-                    outer.Size = UDim2.new(0, dropdownOptions.size, 0, 20)
-                    text.Position = UDim2.new(0, dropdownOptions.size + 8, 0, 0)
+                local dropdownCache = { }
+                function self.close()
+                    if not self.isopen then return end
+                    self.isopen = false
 
-                    inner.MouseButton1Click:Connect(function()
-                        self.visible = not self.visible
-                        dropdownWindow.Visible = self.visible
-                        if self.visible then
-                            dropdownWindow.Position = UDim2.new(0, dropdownButton.AbsolutePosition.X + dropdownButton.AbsoluteSize.X, 0, dropdownButton.AbsolutePosition.Y)
-                            self.open()
-                            setTopMost(dropdownWindow)
+                    resize(dropdownWindow:FindFirstChild("Expand"), { Rotation = 0 }, options.animation)
+                    dropdownCache.content_size = 178
+                    resize(dropdownWindow:FindFirstChild("Content"), { Size = UDim2.new(1, 0, 0, 0) }, options.animation)
+                end
+
+                function self.open()
+                    if self.isopen then return end
+                    self.isopen = true
+
+                    resize(dropdownWindow:FindFirstChild("Expand"), { Rotation = 90 }, options.animation)
+                    resize(dropdownWindow:FindFirstChild("Content"), { Size = UDim2.new(1, 0, 0, dropdownCache.content_size) }, options.animation)
+                end
+
+                function dropdownCache.update_layers(y)
+                    dropdownWindow:FindFirstChild("Shadow").Position = UDim2.new(0, options.shadow, 0, options.shadow)
+                    dropdownWindow:FindFirstChild("Shadow").Size = UDim2.new(1, 0, 0, y)
+                    dropdownWindow:FindFirstChild("Shadow").SliceScale = options.rounding / 100
+                    dropdownWindow:FindFirstChild("Layer").Size = UDim2.new(1, 0, 0, y)
+                    dropdownWindow:FindFirstChild("Layer").SliceScale = options.rounding / 100
+                end dropdownCache.update_layers(dropdownWindow.AbsoluteSize.Y + dropdownWindow:FindFirstChild("Content").AbsoluteSize.Y)
+
+                dropdownWindow:FindFirstChild("Content"):GetPropertyChangedSignal("Size"):Connect(function()
+                    dropdownCache.update_layers(dropdownWindow.AbsoluteSize.Y + dropdownWindow:FindFirstChild("Content").AbsoluteSize.Y)
+                end)
+
+                local dropdownItems = dropdownWindow:FindFirstChild("Content"):FindFirstChild("Items")
+                local function updateCanvas()
+                    local XY = countSize(dropdownItems)
+                    if XY then
+                        dropdownItems.CanvasSize = UDim2.new(0, 0, 0, XY.Y)
+                    end
+                end
+
+                dropdownItems.ScrollBarImageColor3 = Color3.new()
+                dropdownItems.ChildAdded:Connect(updateCanvas)
+                dropdownItems.ChildRemoved:Connect(updateCanvas)
+
+                local dropdownObjects = { }
+                function self.new(name)
+                    local dropdownObject = { }
+                    dropdownObject.selected = false
+                    dropdownObject.name = name
+                    assert(rawget(dropdownObjects, name) == nil, string.format("object already exists in dropdown '%s'", dropdownOptions.text))
+                    rawset(dropdownObjects, name, dropdownObject)
+
+                    local dropdownOption = new("DropdownOption")
+                    dropdownObject.object = dropdownOption
+                    dropdownOption.Parent = dropdownItems
+                    dropdownOption.Text = "  " + name
+                    dropdownOption.TextColor3 = Color3.fromRGB(178, 178, 178)
+                    dropdownOption.MouseButton1Click:Connect(function()
+                        if findBrowsingTopMost() == dropdownWindow then
+                            dropdownObject:Select()
                         end
                     end)
 
-                    dropdownWindow:FindFirstChild("Expand").MouseButton1Click:Connect(function()
-                        if self.isopen then
-                            self.close()
+                    function dropdownObject.Select()
+                        self.selected = name
+                        for i, v in next, dropdownObjects do
+                            v.selected = false
+                            resize(v.object, { TextColor3 = Color3.fromRGB(178, 178, 178) }, 0.1)
+                            resize(v.object:GetChildren()[1], { ImageColor3 = Color3.fromRGB(42, 44, 46) }, 0.1)
+                        end
+                        dropdownObjects[name].selected = true
+                        resize(dropdownOption, { TextColor3 = Color3.new(1, 1, 1) }, 0.1)
+                        resize(dropdownOption:GetChildren()[1], { ImageColor3 = dropdownOptions.selectioncolor }, 0.1)
+                        inner:FindFirstChild("Value").Text = string.format("[ %s ]", name)
+                        dropdownWindow:FindFirstChild("Content"):FindFirstChild("Selected").Text = string.format("[ %s ]", name)
+                        if not self.eventBlock then
+                            self.event:Fire(name)
+                        end
+                        if dropdownOptions.flag then
+                            config[dropdownOptions.flag] = name
+                            saveConfig()
+                        end
+                    end
+
+                    function dropdownObject.Destroy()
+                        if rawget(dropdownObject, name) then
+                            inner:FindFirstChild("Value").Text = "[...]"
+                            dropdownWindow:FindFirstChild("Content"):FindFirstChild("Selected").Text = "[...]"
+                        end
+                        self.selected = nil
+                        rawset(dropdownObject, name, nil)
+                    end
+
+                    return dropdownObject
+                end
+
+                function self.search(key)
+                    for name, dropdownObject in next, dropdownObjects do
+                        dropdownObject.object.Parent = dropdownWindow:FindFirstChild("Cache")
+                        if dropdownObject.name:match(key) then
+                            dropdownObject.object.Parent = dropdownItems
+                        end
+                    end
+                end
+
+                do -- search bar
+                    local TextBox = dropdownWindow:FindFirstChild("Content"):FindFirstChild("Search"):FindFirstChild("Outer"):FindFirstChild("Inner"):FindFirstChild("TextBox")
+                    local inTextBox = false
+                    TextBox.MouseEnter:Connect(function()
+                        inTextBox = true
+                    end)
+                    TextBox.MouseLeave:Connect(function()
+                        inTextBox = false
+                    end)
+
+                    local lastTick = tick()
+                    local lastTickN = 1
+                    local text = ""
+                    local canSearch = false
+                    local shift = false
+                    local backspace = false
+                    local function updateTextBox()
+                        lastTick = tick()
+                        lastTickN = 1
+                        self.search(text)
+                    end
+
+                    mouse.InputBegan:Connect(function()
+                        if findBrowsingTopMost() == dropdownWindow then
+                            canSearch = inTextBox
                         else
-                            self.open()
+                            canSearch = false
+                        end
+                        if canSearch then
+                            TextBox.TextColor3 = Color3.new(1, 1, 1)
+                            spawn(function()
+                                while canSearch do
+                                    TextBox.Text = text .. (lastTickN == 1 and "|" or "")
+                                    if (tick() - lastTick) >= 0.5 then
+                                        lastTick = tick()
+                                        lastTickN = 1 - lastTickN
+                                    end
+                                    RunService.Heartbeat:Wait()
+                                end
+                                lastTickN = 0
+                                TextBox.Text = text .. (lastTickN == 1 and "|" or "")
+                                TextBox.TextColor3 = Color3.fromRGB(178, 178, 178)
+                                if text == "" then
+                                    TextBox.Text = "Search ..."
+                                end
+                            end)
                         end
                     end)
 
-                    local dropdownCache = { }
-                    function self.close()
-                        if not self.isopen then return end
-                        self.isopen = false
-
-                        resize(dropdownWindow:FindFirstChild("Expand"), { Rotation = 0 }, options.animation)
-                        dropdownCache.content_size = 200
-                        dropdownCache.tabs_size = tabs.Size.Y.Offset
-                        resize(dropdownWindow:FindFirstChild("Content"), { Size = UDim2.new(1, 0, 0, 0) }, options.animation)
-                    end
-
-                    function self.open()
-                        if self.isopen then return end
-                        self.isopen = true
-
-                        resize(dropdownWindow:FindFirstChild("Expand"), { Rotation = 90 }, options.animation)
-                        resize(dropdownWindow:FindFirstChild("Content"), { Size = UDim2.new(1, 0, 0, dropdownCache.content_size) }, options.animation)
-                    end
-
-                    function dropdownCache.update_layers(y)
-                        dropdownWindow:FindFirstChild("Shadow").Position = UDim2.new(0, options.shadow, 0, options.shadow)
-                        dropdownWindow:FindFirstChild("Shadow").Size = UDim2.new(1, 0, 0, y)
-                        dropdownWindow:FindFirstChild("Shadow").SliceScale = options.rounding / 100
-                        dropdownWindow:FindFirstChild("Layer").Size = UDim2.new(1, 0, 0, y)
-                        dropdownWindow:FindFirstChild("Layer").SliceScale = options.rounding / 100
-                    end dropdownCache.update_layers(dropdownWindow.AbsoluteSize.Y + dropdownWindow:FindFirstChild("Content").AbsoluteSize.Y)
-
-                    dropdownWindow:FindFirstChild("Content"):GetPropertyChangedSignal("Size"):Connect(function()
-                        dropdownCache.update_layers(main.AbsoluteSize.Y + dropdownWindow:FindFirstChild("Content").AbsoluteSize.Y)
-                    end)
-
-                    local dropdownItems = dropdownWindow:FindFirstChild("Content"):FindFirstChild("Items")
-                    local function updateCanvas()
-                        local XY = countSize(dropdownItems)
-                        if XY then
-                            dropdownItems.CanvasSize = UDim2.new(0, 0, 0, XY.Y)
+                    UserInputService.InputBegan:Connect(function(inputObject)
+                        local keycode = inputObject.KeyCode
+                        if keycode == Enum.KeyCode.LeftShift then
+                            shift = true
                         end
-                    end
+                        if canSearch then
+                            if keycode == Enum.KeyCode.Backspace then
+                                backspace = true
+                                text = text:sub(1, -2)
+                                updateTextBox()
 
-                    dropdownItems.ScrollBarImageColor3 = Color3.new()
-                    dropdownItems.ChildAdded:Connect(updateCanvas)
-                    dropdownItems.ChildRemoved:Connect(updateCanvas)
-
-                    local dropdownObjects = { }
-                    function self.new(name)
-                        local dropdownObject = { }
-                        dropdownObject.selected = false
-                        dropdownObject.name = name
-                        assert(rawget(dropdownObjects, name) == nil, string.format("object already exists in dropdown '%s'", dropdownOptions.text))
-                        rawset(dropdownObjects, name, dropdownObject)
-
-                        local dropdownOption = new("DropdownOption")
-                        dropdownObject.object = dropdownOption
-                        local content = dropdownWindow:FindFirstChild("Content")
-                        dropdownOption.Parent = dropdownItems
-                        dropdownOption.Text = "  " .. name
-                        dropdownOption.TextColor3 = Color3.fromRGB(178, 178, 178)
-                        dropdownOption.MouseButton1Click:Connect(function()
-                            if findBrowsingTopMost() == dropdownWindow then
-                                dropdownObject:Select()
-                            end
-                        end)
-
-                        function dropdownObject.Select()
-                            self.selected = name
-                            for i, v in next, dropdownObjects do
-                                v.selected = false
-                                resize(v.object, { TextColor3 = Color3.fromRGB(178, 178, 178) }, 0.1)
-                                resize(v.object:GetChildren()[1], { ImageColor3 = Color3.fromRGB(42, 44, 46) }, 0.1)
-                            end
-                            dropdownObjects[name].selected = true
-                            resize(dropdownOption, { TextColor3 = Color3.new(1, 1, 1) }, 0.1)
-                            resize(dropdownOption:GetChildren()[1], { ImageColor3 = dropdownOptions.selectioncolor }, 0.1)
-                            inner:FindFirstChild("Value").Text = string.format("[ %s ]", name)
-                            dropdownWindow:FindFirstChild("Content"):FindFirstChild("Selected").Text = string.format("[ %s ]", name)
-                            if not self.eventBlock then
-                                self.event:Fire(name)
-                            end
-                        end
-
-                        function dropdownObject.Destroy()
-                            if rawget(dropdownObject, name) then
-                                inner:FindFirstChild("Value").Text = "[...]"
-                                dropdownWindow:FindFirstChild("Content"):FindFirstChild("Selected").Text = "[...]"
-                            end
-                            self.selected = nil
-                            rawset(dropdownObject, name, nil)
-                        end
-
-                        return dropdownObject
-                    end
-
-                    function self.search(key)
-                        for name, dropdownObject in next, dropdownObjects do
-                            dropdownObject.object.Parent = dropdownWindow:FindFirstChild("Cache")
-                            if dropdownObject.name:match(key) then
-                                dropdownObject.object.Parent = dropdownItems
-                            end
-                        end
-                    end
-
-                    do -- search bar
-                        local TextBox = dropdownWindow:FindFirstChild("Content"):FindFirstChild("Search"):FindFirstChild("Outer"):FindFirstChild("Inner"):FindFirstChild("TextBox")
-                        local inTextBox = false
-                        TextBox.MouseEnter:Connect(function()
-                            inTextBox = true
-                        end)
-                        TextBox.MouseLeave:Connect(function()
-                            inTextBox = false
-                        end)
-
-                        local lastTick = tick()
-                        local lastTickN = 1
-                        local text = ""
-                        local canSearch = false
-                        local shift = false
-                        local backspace = false
-                        local function updateTextBox()
-                            lastTick = tick()
-                            lastTickN = 1
-                            self.search(text)
-                        end
-
-                        mouse.InputBegan:Connect(function()
-                            if findBrowsingTopMost() == dropdownWindow then
-                                canSearch = inTextBox
-                            else
-                                canSearch = false
-                            end
-                            if canSearch then
-                                TextBox.TextColor3 = Color3.new(1, 1, 1)
+                                local backspaceTick = tick()
+                                local backspaceN = 0.5
                                 spawn(function()
-                                    while canSearch do
-                                        TextBox.Text = text .. (lastTickN == 1 and "|" or "")
-                                        if (tick() - lastTick) >= 0.5 then
-                                            lastTick = tick()
-                                            lastTickN = 1 - lastTickN
+                                    while backspace do
+                                        if (tick() - backspaceTick) >= backspaceN then
+                                            backspaceN = 0.05
+                                            backspaceTick = tick()
+                                            text = text:sub(1, -2)
+                                            updateTextBox()
                                         end
                                         RunService.Heartbeat:Wait()
                                     end
-                                    lastTickN = 0
-                                    TextBox.Text = text .. (lastTickN == 1 and "|" or "")
-                                    TextBox.TextColor3 = Color3.fromRGB(178, 178, 178)
-                                    if text == "" then
-                                        TextBox.Text = "Search ..."
-                                    end
+                                    backspaceN = 0.5
                                 end)
+                            elseif keycode == Enum.KeyCode.Space then
+                                text = text .. " "
+                                updateTextBox()
                             end
-                        end)
-
-                        UserInputService.InputBegan:Connect(function(inputObject)
-                            local keycode = inputObject.KeyCode
-                            if keycode == Enum.KeyCode.LeftShift then
-                                shift = true
+                            if betweenOpenInterval(keycode.Value, 48, 57) then -- 0-9
+                                local name = rawget({ Zero = 0, One = 1, Two = 2, Three = 3, Four = 4, Five = 5, Six = 6, Seven = 7, Eight = 8, Nine = 9 }, keycode.Name)
+                                text = text .. name
+                                updateTextBox()
                             end
-                            if canSearch then
-                                if keycode == Enum.KeyCode.Backspace then
-                                    backspace = true
-                                    text = text:sub(1, -2)
-                                    updateTextBox()
-
-                                    local backspaceTick = tick()
-                                    local backspaceN = 0.5
-                                    spawn(function()
-                                        while backspace do
-                                            if (tick() - backspaceTick) >= backspaceN then
-                                                backspaceN = 0.05
-                                                backspaceTick = tick()
-                                                text = text:sub(1, -2)
-                                                updateTextBox()
-                                            end
-                                            RunService.Heartbeat:Wait()
-                                        end
-                                        backspaceN = 0.5
-                                    end)
-                                elseif keycode == Enum.KeyCode.Space then
-                                    text = text .. " "
-                                    updateTextBox()
-                                end
-                                if betweenOpenInterval(keycode.Value, 48, 57) then -- 0-9
-                                    local name = rawget({ Zero = 0, One = 1, Two = 2, Three = 3, Four = 4, Five = 5, Six = 6, Seven = 7, Eight = 8, Nine = 9 }, keycode.Name)
-                                    -- if shift then
-                                    --     name = rawget({ "=", "!", '"', "#", "¤", "%", "&", "/", "(", ")" }, name + 1)
-                                    -- end
-                                    text = text .. name
-                                    updateTextBox()
-                                end
-                                if betweenOpenInterval(keycode.Value, 97, 122) then -- A-Z
-                                    local name = (not shift) and keycode.Name:lower() or keycode.Name
-                                    text = text .. name
-                                    updateTextBox()
-                                end
+                            if betweenOpenInterval(keycode.Value, 97, 122) then -- A-Z
+                                local name = (not shift) and keycode.Name:lower() or keycode.Name
+                                text = text .. name
+                                updateTextBox()
                             end
-                        end)
-                        UserInputService.InputEnded:Connect(function(inputObject)
-                            if inputObject.KeyCode == Enum.KeyCode.LeftShift then
-                                shift = false
-                            elseif inputObject.KeyCode == Enum.KeyCode.Backspace then
-                                backspace = false
-                            end
-                        end)
-                    end
-
-                    function self.setPosition(position)
-                        dropdownWindow.Position = position
-                    end
-
-                    function self:Destroy()
-                        dropdownButton:Destroy()
-                        dropdownWindow:Destroy()
-                    end
-
-                    self.self = dropdownButton
-                    self.close()
-                    return self
-                end
-
-                function types.dock(dockOptions)
-                    local self = { }
-
-                    dockOptions = settings.new({
-                    }).handle(dockOptions)
-
-                    local dock = new("Dock")
-                    dock.Parent = items
-
-                    dock.ChildAdded:Connect(function()
-                        local size = countSize(dock, true).X
-                        dock.Size = UDim2.new(0, size, 0, 22)
-                        updateCanvas()
+                        end
                     end)
-
-                    function self.new(type, typeOptions)
-                        assert(typeof(type) == "string", "expected string as #1 argument")
-                        type = type:lower()
-                        assert(type ~= "folder", "illegal type")
-
-                        local p = rawget(types, type)
-                        assert(p, "invalid type")
-                        local o = p(typeOptions)
-                        o.type = type
-                        o.self.Parent = self.self
-
-                        return o
-                    end
-
-                    self.updated = event.new()
-                    dock.ChildAdded:Connect(function() self.updated:Fire() end)
-                    dock.ChildRemoved:Connect(function() self.updated:Fire() end)
-
-                    function self:Destroy()
-                        dock:Destroy()
-                    end
-
-                    self.options = dockOptions
-                    self.self = dock
-                    return self
+                    UserInputService.InputEnded:Connect(function(inputObject)
+                        if inputObject.KeyCode == Enum.KeyCode.LeftShift then
+                            shift = false
+                        elseif inputObject.KeyCode == Enum.KeyCode.Backspace then
+                            backspace = false
+                        end
+                    end)
                 end
 
-                function types.folder(folderOptions)
-                    local self = { }
+                function self.setPosition(position)
+                    dropdownWindow.Position = position
+                end
+
+                function self:Destroy()
+                    dropdownButton:Destroy()
+                    dropdownWindow:Destroy()
+                end
+
+                function self.Set(value)
+                    for name, obj in pairs(dropdownObjects) do
+                        if name == value then
+                            obj.Select()
+                            break
+                        end
+                    end
+                end
+
+                self.self = dropdownButton
+                self.close()
+                if dropdownOptions.flag then
+                    self.elements[dropdownOptions.flag] = self
+                end
+                return self
+            end
+
+            function types.dock(dockOptions)
+                local self = { }
+
+                dockOptions = settings.new({
+                }).handle(dockOptions)
+
+                local dock = new("Dock")
+                dock.Parent = content
+
+                dock.ChildAdded:Connect(function()
+                    local size = countSize(dock, true).X
+                    dock.Size = UDim2.new(0, size, 0, 22)
+                end)
+
+                function self.new(type, typeOptions)
+                    assert(typeof(type) == "string", "expected string as #1 argument")
+                    type = type:lower()
+                    assert(type ~= "folder", "illegal type")
+
+                    local p = rawget(types, type)
+                    assert(p, "invalid type")
+                    local o = p(typeOptions)
+                    o.type = type
+                    o.self.Parent = self.self
+
+                    return o
+                end
+
+                self.updated = event.new()
+                dock.ChildAdded:Connect(function() self.updated:Fire() end)
+                dock.ChildRemoved:Connect(function() self.updated:Fire() end)
+
+                function self:Destroy()
+                    dock:Destroy()
+                end
+
+                self.options = dockOptions
+                self.self = dock
+                return self
+            end
+
+            function types.folder(folderOptions)
+                local self = { }
+                self.isopen = false
+
+                folderOptions = settings.new({
+                    text = "New Folder",
+                    isopen = false,
+                    color = options.color,
+                    rounding = options.rounding,
+                    animation = options.animation,
+                }).handle(folderOptions)
+                self.isopen = folderOptions.isopen
+
+                local folder = new("Folder")
+                folder.Parent = content
+
+                local _folder = folder:FindFirstChild("Folder")
+                local folderItems = folder:FindFirstChild("Items")
+                _folder.SliceScale = folderOptions.rounding / 100
+                _folder.ImageColor3 = folderOptions.color
+
+                function self.setColor(color)
+                    _folder.ImageColor3 = color
+                end
+
+                function self.getColor()
+                    return _folder.ImageColor3
+                end
+
+                local title = _folder:FindFirstChild("Title")
+                local expand = _folder:FindFirstChild("Expand")
+                title.Text = folderOptions.text
+
+                function self.close()
+                    resize(folder, { Size = UDim2.new(1, 0, 0, 20) }, folderOptions.animation)
+                    resize(expand, { Rotation = 0 }, folderOptions.animation)
                     self.isopen = false
+                end
 
-                    folderOptions = settings.new({
-                        text = "New Folder",
-                        isopen = false,
-                        color = options.color,
-                        rounding = options.rounding,
-                        animation = options.animation,
-                    }).handle(folderOptions)
-                    self.isopen = folderOptions.isopen
+                function self.open()
+                    local size = countSize(folderItems, true).X
+                    resize(folder, { Size = UDim2.new(1, 0, 0, 20 + countSize(folderItems).Y + 2) }, folderOptions.animation)
+                    resize(expand, { Rotation = 90 }, folderOptions.animation)
+                    self.isopen = true
+                end
 
-                    local folder = new("Folder")
-                    folder.Parent = items
-
-                    local _folder = folder:FindFirstChild("Folder")
-                    local folderItems = folder:FindFirstChild("Items")
-                    _folder.SliceScale = folderOptions.rounding / 100
-                    _folder.ImageColor3 = folderOptions.color
-
-                    function self.setColor(color)
-                        _folder.ImageColor3 = color
+                function self.switch()
+                    if self.isopen then
+                        self.close()
+                    else
+                        self.open()
                     end
+                end
 
-                    function self.getColor()
-                        return _folder.ImageColor3
-                    end
+                expand.MouseButton1Click:Connect(function()
+                    self.switch()
+                end)
 
-                    local title = _folder:FindFirstChild("Title")
-                    local expand = _folder:FindFirstChild("Expand")
-                    title.Text = folderOptions.text
+                local folderCache = { }
+                function self.new(type, typeOptions)
+                    assert(typeof(type) == "string", "expected string as #1 argument")
+                    type = type:lower()
+                    local p = rawget(types, type)
+                    assert(p, "invalid type")
+                    local o = p(typeOptions)
+                    table.insert(folderCache, o)
+                    o.type = type
+                    o.self.Parent = folderItems
 
-                    function self.close()
-                        resize(folder, { Size = UDim2.new(1, 0, 0, 20) }, folderOptions.animation)
-                        resize(expand, { Rotation = 0 }, folderOptions.animation)
-                        self.isopen = false
-                    end
-
-                    function self.open()
-                        local size = countSize(folderItems, true).X
-                        resize(folder, { Size = UDim2.new(1, 0, 0, 20 + countSize(folderItems).Y + 2) }, folderOptions.animation)
-                        resize(expand, { Rotation = 90 }, folderOptions.animation)
-                        self.isopen = true
-                    end
-
-                    function self.switch()
-                        if self.isopen then
-                            self.close()
-                        else
-                            self.open()
-                        end
-                    end
-
-                    expand.MouseButton1Click:Connect(function()
-                        self.switch()
-                    end)
-
-                    local folderCache = { }
-                    function self.new(type, typeOptions)
-                        assert(typeof(type) == "string", "expected string as #1 argument")
-                        type = type:lower()
-                        local p = rawget(types, type)
-                        assert(p, "invalid type")
-                        local o = p(typeOptions)
-                        table.insert(folderCache, o)
-                        o.type = type
-                        o.self.Parent = folderItems
-
-                        if self.isopen then
-                            self.open()
-                        end
-
-                        if o.type == "folder" then
-                            o.updated:Connect(function()
-                                if self.isopen then
-                                    self.open()
-                                end
-                            end)
-                        end
-
-                        if o.type == "dock" then
-                            o.updated:Connect(function()
-                                if self.isopen then
-                                    self.open()
-                                end
-                            end)
-                        end
-
-                        return o
-                    end
-
-                    self.updated = folder:GetPropertyChangedSignal("Size")
-
-                    function self:Destroy()
-                        for i, v in next, folderCache do
-                            v:Destroy()
-                        end
-                        folder:Destroy()
-                    end
-
-                    self.close()
                     if self.isopen then
                         self.open()
                     end
-                    self.options = folderOptions
-                    self.self = folder
-                    return self
-                end
-            end
 
-            function self.new(type, typeOptions)
-                assert(typeof(type) == "string", "expected string as #1 argument")
-                type = type:lower()
-
-                local p = rawget(types, type)
-                assert(p, "invalid type")
-                local o = p(typeOptions)
-                o.type = type
-
-                if o.type == "folder" then
-                    o.updated:Connect(updateCanvas)
-                end
-
-                return setmetatable(o, {
-                    __index = function(self, idx)
-                        return rawget(rawget(self, "event"), idx)
-                    end,
-                    __newindex = function()end,
-                })
-            end
-
-            function self.show()
-                for i, v in next, tabbuttons:GetChildren() do
-                    if not v:IsA("UIListLayout") then
-                        resize(v, { TextColor3 = Color3.new(0.4, 0.4, 0.4) }, options.animation)
+                    if o.type == "folder" then
+                        o.updated:Connect(function()
+                            if self.isopen then
+                                self.open()
+                            end
+                        end)
                     end
-                end
-                for i, v in next, content:GetChildren() do
-                    if v.Name == "Tab" then
-                        v.Visible = false
+
+                    if o.type == "dock" then
+                        o.updated:Connect(function()
+                            if self.isopen then
+                                self.open()
+                            end
+                        end)
                     end
+
+                    return o
                 end
-                resize(tabbutton, { TextColor3 = Color3.new(1, 1, 1) }, options.animation)
-                tab.Visible = true
+
+                self.updated = folder:GetPropertyChangedSignal("Size")
+
+                function self:Destroy()
+                    for i, v in next, folderCache do
+                        v:Destroy()
+                    end
+                    folder:Destroy()
+                end
+
+                self.close()
+                if self.isopen then
+                    self.open()
+                end
+                self.options = folderOptions
+                self.self = folder
+                return self
+            end
+        end
+
+        function self.new(type, typeOptions)
+            assert(typeof(type) == "string", "expected string as #1 argument")
+            type = type:lower()
+
+            local p = rawget(types, type)
+            assert(p, "invalid type")
+            local o = p(typeOptions)
+            o.type = type
+
+            if o.type == "folder" then
+                o.updated:Connect(function()
+                    local size = countSize(content)
+                    content.Size = UDim2.new(1, 0, 0, size.Y)
+                end)
             end
 
-            self.show()
-            return self
+            return setmetatable(o, {
+                __index = function(self, idx)
+                    return rawget(rawget(self, "event"), idx)
+                end,
+                __newindex = function()end,
+            })
         end
 
         function self.close()
@@ -2504,7 +2629,7 @@ do -- window history zindex
 
     mouse.InputBegan:Connect(function()
         wait()
-        if (not colorpicking) and (not sliding) then
+        if (not colorpicking) and (not sliding) and (not resizing) then
             local lastZIndex, focused = math.huge
             for i, v in next, mouseCache do
                 if v and windowHistory[i] < lastZIndex then
