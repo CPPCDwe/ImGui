@@ -1170,13 +1170,13 @@ local mouse = { } do
     mouse.InputBegan = event.new()
     mouse.InputEnded = event.new()
     UserInputService.InputBegan:Connect(function(inputObject)
-        if inputObject.UserInputType = Enum.UserInputType.MouseButton1 then
+        if inputObject.UserInputType == Enum.UserInputType.MouseButton1 then
             mouse.held = true
             mouse.InputBegan:Fire()
         end
     end)
     UserInputService.InputEnded:Connect(function(inputObject)
-        if inputObject.UserInputType = Enum.UserInputType.MouseButton1 then
+        if inputObject.UserInputType == Enum.UserInputType.MouseButton1 then
             mouse.held = false
             mouse.InputEnded:Fire()
         end
@@ -1724,17 +1724,21 @@ local library = {
                     end
                     if switchOptions.flag then
                         config[switchOptions.flag] = self.on
-                        self.saveConfig()
+                        saveConfig()
                     end
                 end
 
                 function self.setColor(color)
-                    ImageLabel.ImageColor3 = switchOptions.color
-                    Layer.ImageColor3 = tint(switchOptions.color)
+                    ImageLabel.ImageColor3 = color
+                    layer.ImageColor3 = tint(color)
                 end
 
                 function self.getColor()
                     return ImageLabel.ImageColor3
+                end
+
+                function self.Set(value)
+                    self.set(value)
                 end
 
                 function self:Destroy()
@@ -1835,7 +1839,7 @@ local library = {
                     set(p)
                     if sliderOptions.flag then
                         config[sliderOptions.flag] = self.value
-                        self.saveConfig()
+                        saveConfig()
                     end
                 end
                 self.set(self.value)
@@ -2051,7 +2055,7 @@ local library = {
                                     local v1 = x1 / saturation.AbsoluteSize.Y
                                     v = 1 - v1
 
-                                    local sv1 = math.clamp(v1, 0, (saturation.AbsoluteSize.Y - 2) / saturation.AbsoluteSize.Y)
+                                    local sv1 = math.clamp(v1, 0, (palette.AbsoluteSize.Y - 2) / palette.AbsoluteSize.Y)
                                     resize(saturationIndicator, { Position = UDim2.new(0, 0, sv1, 0) }, options.animation)
 
                                     update()
@@ -2215,7 +2219,7 @@ local library = {
                     local dropdownOption = new("DropdownOption")
                     dropdownObject.object = dropdownOption
                     dropdownOption.Parent = dropdownItems
-                    dropdownOption.Text = "  " + name
+                    dropdownOption.Text = "  " .. name
                     dropdownOption.TextColor3 = Color3.fromRGB(178, 178, 178)
                     dropdownOption.MouseButton1Click:Connect(function()
                         if findBrowsingTopMost() == dropdownWindow then
